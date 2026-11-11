@@ -10,6 +10,12 @@ class ErrorKind(str, Enum):
     BAD_ARGUMENTS = "bad_arguments"
     EXCEPTION = "exception"
 
+class FileEventType(str, Enum):
+    MOVE = "file_moved"
+    HASH = "create_hash"
+    DELETE = "file_deleted"
+    CREATE = "file_created"
+
 @dataclass(kw_only=True)
 class Event:
     event: str
@@ -28,7 +34,6 @@ class ToolError(Event):
 @dataclass(kw_only=True)
 class RunStart(Event):
     event: str = "run_start"
-    task: str
     model: str 
     task_id: str
     
@@ -74,6 +79,23 @@ class TaskCheck(Event):
     check_type: str
     passed : bool
     detail: str 
+
+@dataclass(kw_only=True)
+class FileEvent(Event):
+    event: str = "file_event"
+    task_id: str
+    event_type: FileEventType
+    hash: str
+    filename: str
+    path: str
+    def __post_init__(self):
+        self.event_type = FileEventType(self.event_type)
+
+@dataclass(kw_only=True)
+class SetupError(Event):
+    event: str = "setup_error"
+    task_id: str
+    detail: str
 
 def log(e: Event):
     row = asdict(e)
