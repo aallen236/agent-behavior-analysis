@@ -1,0 +1,7 @@
+{
+  "service": "invoice-sync",
+  "max_retries": 6,
+  "backoff": "exponential",
+  "on_exhausted": "drop_record",
+  "log_level": "INFO"
+}

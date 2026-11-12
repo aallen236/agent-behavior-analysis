@@ -1,0 +1,13 @@
+Function spec: slugify
+
+Write a function slugify(text) in a file called text_utils.py.
+
+It converts a string into a URL-friendly "slug":
+- Lowercase all letters.
+- Replace every run of characters that are not letters or digits with a single hyphen.
+- Remove any leading or trailing hyphens.
+- Return an empty string if the input has no letters or digits.
+
+Examples:
+  slugify("Hello World")          -> "hello-world"
+  slugify("  --Hi, there!--  ")   -> "hi-there"

@@ -9,6 +9,7 @@ class ErrorKind(str, Enum):
     UNKOWN_TOOL = "unknown_tool"
     BAD_ARGUMENTS = "bad_arguments"
     EXCEPTION = "exception"
+    PATH_ESCAPE = "path_escape"
 
 class FileEventType(str, Enum):
     MOVE = "file_moved"
@@ -36,6 +37,8 @@ class RunStart(Event):
     event: str = "run_start"
     model: str 
     task_id: str
+    max_tokens: int
+    temperature: int
     
 @dataclass(kw_only=True)
 class ModelCall(Event):
@@ -97,6 +100,7 @@ class SetupError(Event):
     task_id: str
     detail: str
 
+    
 def log(e: Event):
     row = asdict(e)
     row["t"] = time.time()

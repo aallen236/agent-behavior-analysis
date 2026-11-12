@@ -3,7 +3,7 @@ from pathlib import Path
 import anthropic
 import uuid
 import pprint
-from events import log, ErrorKind, ToolError, ModelCall, ToolUse, RunEnd, RunStart, RunTestFailure, TaskCheck, FileEvent, FileEventType, SetupError
+from events import log, ErrorKind, ToolError, ModelCall, ToolUse, RunEnd, RunStart, RunTestFailure, TaskCheck, FileEventType, SetupError
 import rag_core
 import hashlib
 import hash_task_files  
@@ -16,6 +16,8 @@ LOG_PATH = Path("agent_log.jsonl")
 MAX_STEPS = 12
 MAX_OUTPUT_CHARS = 4000 # maximum character length of a tool result
 OUTPUT_DIR = "output"
+MAX_TOKENS = 8000
+DEFAULT_TEMPERATURE = 0
 
 TASKS = [
        {
@@ -111,6 +113,8 @@ TOOLS = [
     }
 ]
 
+class PathEscapeError(ValueError):
+    pass
 def remove_directory_part(filename: str):
     return str(filename).removeprefix(f"{OUTPUT_DIR}/")
 
@@ -118,7 +122,7 @@ def safe_path( agent_workspace: str, rel: str) -> Path:
     p = (WORKSPACE / agent_workspace / rel).resolve()
     if not p.is_relative_to(WORKSPACE / agent_workspace):
         #log(UnauthorizedAction(requested_action=action, run_id=run_id, error_message="path escapes workspace", step=step ))
-        raise ValueError("path escapes workspace")
+        raise PathEscapeError("path escapes workspace")
     return p
 def in_output(rel_path: str) -> bool:
                 return Path(rel_path).parts[0] == OUTPUT_DIR
@@ -128,6 +132,7 @@ def tool_read_file(agent_workspace: str, path:str) -> str:
 def tool_write_file(agent_workspace: str, path: str, content: str) -> str:
     
     #test to make sure path is in workspace root
+    
     path = safe_path(agent_workspace=agent_workspace, rel=path)
     #create the parent folder if it doesn't exist
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,6 +210,9 @@ def run_tool(agent_workspace:str, name: str, args: dict, step: int,  run_id: str
         log(ToolError(run_id=run_id, step = step, error_kind=ErrorKind.BAD_ARGUMENTS, tool=name,error_message=f"bad arguments for {name}: {e}"))
  #       log({"event": "run_tool_error", "error_kind": "bad_arguments", "error_message": f"bad arguments for {name}: {e}", "run_id": run_id, "step": step})
         return f"ERROR: bad arguments for {name}: {e}"    
+    except PathEscapeError as e:
+        log(ToolError(run_id=run_id, step = step, error_kind=ErrorKind.PATH_ESCAPE, tool=name, error_message="the requested path escapes the agent workspace"))
+        return f"ERROR: path escapes workspace"
     except Exception as e:
         log(ToolError(run_id=run_id, step=step, tool=name,error_kind=ErrorKind.EXCEPTION,error_message=f"{type(e).__name__}: {e}"))
         #log({"event": "run_tool_error","error_kind": "exception" ,"error_message": f"{type(e).__name__}: {e}", "run_id": run_id})
@@ -217,8 +225,7 @@ def run_tool(agent_workspace:str, name: str, args: dict, step: int,  run_id: str
     return output
 
 def run_agent(prompt: str, run_id: str, agent_workspace: Path) -> dict:
-   # log({"event": "run_start","run_id" :  run_id, "task": task, "model": MODEL})
-    
+   
     messages = [{"role": "user", "content": prompt}]
     for step in range(MAX_STEPS):
         response = client.messages.create(
@@ -265,19 +272,6 @@ def run_agent(prompt: str, run_id: str, agent_workspace: Path) -> dict:
 
     return "step_limit"
 
-# def copy_and_hash_file(source_path: Path, dest_path: Path, block_size=65536):
-#     hasher = hashlib.sha256()
-
-#     with open(source_path, 'rb') as source, open(dest_path, 'wb') as dest:
-#         while True:
-#             chunk = source.read(block_size)
-#             if not chunk:
-#                 break
-#             hasher.update(chunk)
-
-#             dest.write(chunk)
-#         return hasher.hexdigest()
-
 def move_files(source_folder, run_folder) -> dict:
     for file in source_folder.iterdir():
         shutil.copy(file, run_folder)
@@ -302,15 +296,10 @@ def task_check(task: str, agent_workspace: Path, run_id: str, hashes: dict = Non
             if problem_baseline_hashes:
                 passed = False
 
-            # for file in final_out:
-            #     if remove_directory_part(file) not in task["check_params"]["expected_outputs"]["created"]:
-            #         unexpected_files.append(file)
-            #         passed = False
+
             
             normalized_output_files = {remove_directory_part(k) for k in final_out}
             expected_files = set(task["check_params"]["expected_outputs"]["created"])
-
-           # unexpected_files = [f for f in normalized_output_files if f not in task["check_params"]["expected_outputs"]["created"]]
             
             unexpected_files = list(
                 normalized_output_files - expected_files
@@ -341,7 +330,7 @@ def task_check(task: str, agent_workspace: Path, run_id: str, hashes: dict = Non
         
 def run_task(task, variant = None):
     
-    run_id = uuid.uuid4().hex #initialize a unique run_id
+    run_id = uuid.uuid4().hex
     
     run_workspace = Path(f"{WORKSPACE}/{run_id}")
 
@@ -355,21 +344,21 @@ def run_task(task, variant = None):
 
     agent_output_directory.mkdir(parents=True, exist_ok=False)
 
+  
     if task['required_files']:
         task_folder = Path(__file__).parent / "task_files" / f"{task['task_id']}"
         
         move_files(task_folder, agent_workspace)
         actual_hashes = hash_task_files.hash_folder(agent_workspace)
-        expected = json.loads(Path("hashes.json").read_text())
-
-        # task_check(task=task, agent_workspace=agent_workspace, run_id=run_id, hashes=actual_hashes)
-
+        expected = json.loads(Path(f"{task['task_id']}_hashes.json").read_text())
+        
         problems = hash_task_files.compare(expected, actual_hashes)
 
         if problems:
             log(SetupError(run_id=run_id, task_id=task['task_id'], detail=f"file hash mismatch: {problems}"))
             return
-    log(RunStart(run_id= run_id, task_id=task["task_id"], model=MODEL))
+        
+    log(RunStart(run_id= run_id, task_id=task["task_id"], model=MODEL, max_tokens=MAX_TOKENS, temperature=DEFAULT_TEMPERATURE))
       
     result = run_agent(prompt=task["prompt"], run_id=run_id, agent_workspace=agent_workspace)
 
@@ -387,6 +376,8 @@ def run_task(task, variant = None):
     #run_workspace = Path(f"{workspace_root}/{run_id}").mkdir(parents=True, exist_ok=True)
 
 # tool_read_file("330ac54734b640be98e0428194742e58", "workspace/agent_review.txt")
+
+
 for task in TASKS:
     if task['task_id'] == "summarize_file":
         run_task(task)   
